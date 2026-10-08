@@ -1,5 +1,5 @@
-using KerioTrafficMonitor.Presentation.ViewModels;
 using System.Windows;
+using KerioTrafficMonitor.Presentation.ViewModels;
 
 namespace KerioTrafficMonitor.Presentation.Views;
 
