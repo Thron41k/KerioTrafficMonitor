@@ -1,360 +1,561 @@
-using System.Net.Http;
 using KerioTrafficMonitor.Application.Options;
 using KerioTrafficMonitor.Domain.Interfaces;
 using KerioTrafficMonitor.Domain.Models;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Net.Http;
 
 namespace KerioTrafficMonitor.Application.Services;
 
-internal sealed class UserRotationService : IUserRotationService, IAsyncDisposable
+public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
 {
-    private readonly IUserStore _userStore;
-    private readonly ICredentialStore _credentialStore;
     private readonly IKerioClientFactory _clientFactory;
+    private readonly ICredentialStore _credentialStore;
+    private readonly IUserStore _userStore;
     private readonly MonitoringOptions _options;
-    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly ILogger<UserRotationService> _logger;
+
+    private readonly object _sync = new();
+
     private readonly Dictionary<Guid, KerioUserStatus> _statuses = [];
-    private readonly CancellationTokenSource _lifetime = new();
 
     private List<KerioUser> _users = [];
+
     private IKerioClient? _client;
     private KerioUser? _currentUser;
     private TrafficInfo? _traffic;
-    private Task? _monitorTask;
+
+    private CancellationTokenSource? _monitoringCts;
+    private Task? _monitoringTask;
+
     private string? _error;
     private DateTimeOffset? _updatedAt;
 
+    public UserRotationService(
+        IKerioClientFactory clientFactory,
+        ICredentialStore credentialStore,
+        IUserStore userStore,
+        IOptions<MonitoringOptions> options,
+        ILogger<UserRotationService> logger)
+    {
+        _clientFactory = clientFactory;
+        _credentialStore = credentialStore;
+        _userStore = userStore;
+        _options = options.Value;
+        _logger = logger;
+    }
+
     public event EventHandler<MonitoringSnapshot>? SnapshotChanged;
 
-    public UserRotationService(
-        IUserStore userStore,
-        ICredentialStore credentialStore,
-        IKerioClientFactory clientFactory,
-        IOptions<MonitoringOptions> options)
+    public async Task StartAsync(
+        CancellationToken cancellationToken = default)
     {
-        _userStore = userStore;
-        _credentialStore = credentialStore;
-        _clientFactory = clientFactory;
-        _options = options.Value;
-    }
-
-    public async Task StartAsync(CancellationToken cancellationToken = default)
-    {
-        if (_monitorTask is not null)
+        if (_monitoringTask is not null)
             return;
 
-        _users = (await _userStore.LoadAsync(cancellationToken)).OrderBy(x => x.Priority).ToList();
-        NormalizePriorities();
-        Publish();
+        _users = (await _userStore.LoadAsync(cancellationToken))
+            .OrderBy(x => x.Priority)
+            .ToList();
 
-        _monitorTask = MonitorLoopAsync(_lifetime.Token);
-        await Task.Yield();
+        NormalizePriorities(_users);
+
+        InitializeStatuses();
+
+        _monitoringCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken);
+
+        _monitoringTask = MonitorAsync(_monitoringCts.Token);
+
+        await SwitchToFirstAvailableAsync(
+            _monitoringCts.Token);
     }
 
-    public async Task StopAsync(CancellationToken cancellationToken = default)
+    public async Task StopAsync(
+        CancellationToken cancellationToken = default)
     {
-        if (_monitorTask is null)
+        if (_monitoringCts is null)
             return;
 
-        _lifetime.Cancel();
-        try { await _monitorTask.WaitAsync(cancellationToken); }
-        catch (OperationCanceledException) { }
-        finally { _monitorTask = null; }
+        await _monitoringCts.CancelAsync();
+
+        if (_monitoringTask is not null)
+        {
+            try
+            {
+                await _monitoringTask;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        _monitoringTask = null;
 
         await LogoutAndDisposeAsync(cancellationToken);
+
+        _monitoringCts.Dispose();
+        _monitoringCts = null;
     }
 
-    public async Task UpdateUsersAsync(IReadOnlyCollection<KerioUser> users, CancellationToken cancellationToken = default)
+    public async Task UpdateUsersAsync(
+        IReadOnlyCollection<KerioUser> users,
+        CancellationToken cancellationToken = default)
     {
-        await _gate.WaitAsync(cancellationToken);
-        try
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_sync)
         {
-            var currentId = _currentUser?.Id;
-            _users = users.OrderBy(x => x.Priority).ToList();
-            NormalizePriorities();
+            _users = users
+                .OrderBy(x => x.Priority)
+                .ToList();
+
+            NormalizePriorities(_users);
 
             foreach (var user in _users)
-                _statuses.TryAdd(user.Id, user.IsEnabled ? KerioUserStatus.Waiting : KerioUserStatus.Disabled);
-
-            if (currentId is not null && _users.All(x => x.Id != currentId.Value))
             {
-                await LogoutAndDisposeAsync(cancellationToken);
-                _currentUser = null;
-                _traffic = null;
-            }
-
-            Publish();
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    public async Task SwitchToNextUserAsync(CancellationToken cancellationToken = default)
-    {
-        await _gate.WaitAsync(cancellationToken);
-        try
-        {
-            var next = GetNextUser();
-            if (next is null)
-            {
-                _error = "Нет доступных учетных записей.";
-                Publish();
-                return;
-            }
-
-            await SwitchToAsync(next, cancellationToken);
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    public async Task RefreshAsync(CancellationToken cancellationToken = default)
-    {
-        await _gate.WaitAsync(cancellationToken);
-        try
-        {
-            if (_currentUser is null)
-            {
-                var next = GetNextUser();
-                if (next is not null)
-                    await SwitchToAsync(next, cancellationToken);
-                return;
-            }
-
-            try
-            {
-                _traffic = await _client!.GetTrafficInfoAsync(cancellationToken);
-                _error = null;
-                _updatedAt = DateTimeOffset.Now;
-                Publish();
-            }
-            catch (Exception ex) when (ex is HttpRequestException or UnauthorizedAccessException or InvalidOperationException)
-            {
-                _error = ex.Message;
-                Publish();
-            }
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    private async Task MonitorLoopAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            await SwitchToFirstAvailableAsync(cancellationToken);
-
-            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(Math.Max(5, _options.IntervalSeconds)));
-            while (await timer.WaitForNextTickAsync(cancellationToken))
-            {
-                await MonitorOnceAsync(cancellationToken);
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            Publish();
-        }
-    }
-
-    private async Task MonitorOnceAsync(CancellationToken cancellationToken)
-    {
-        await _gate.WaitAsync(cancellationToken);
-        try
-        {
-            if (_currentUser is null)
-            {
-                await SwitchToFirstAvailableUnsafeAsync(cancellationToken);
-                return;
-            }
-
-            try
-            {
-                _traffic = await _client!.GetTrafficInfoAsync(cancellationToken);
-                _updatedAt = DateTimeOffset.Now;
-                _error = null;
-                _statuses[_currentUser.Id] = KerioUserStatus.Active;
-                Publish();
-
-                if (_options.AutomaticSwitching &&
-                    _traffic.QuotaUsedPercent >= _options.SwitchThresholdPercent)
+                if (!_statuses.ContainsKey(user.Id))
                 {
-                    _statuses[_currentUser.Id] = KerioUserStatus.LimitReached;
-                    var next = GetNextUser();
-                    if (next is null)
-                    {
-                        _error = "Все доступные учетные записи исчерпали лимит.";
-                        Publish();
-                        return;
-                    }
-
-                    await SwitchToAsync(next, cancellationToken);
+                    _statuses[user.Id] =
+                        KerioUserStatus.Waiting;
                 }
             }
-            catch (UnauthorizedAccessException)
+
+            var validIds = _users
+                .Select(x => x.Id)
+                .ToHashSet();
+
+            foreach (var id in _statuses.Keys
+                         .Where(x => !validIds.Contains(x))
+                         .ToList())
             {
-                var next = GetNextUser();
-                if (next is not null)
-                    await SwitchToAsync(next, cancellationToken);
+                _statuses.Remove(id);
             }
-            catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
+        }
+
+        Publish();
+
+        await Task.CompletedTask;
+    }
+
+    public async Task RefreshAsync(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (_currentUser is null || _client is null)
+        {
+            if (_options.AutomaticSwitching)
             {
-                _error = ex.Message;
+                await SwitchToFirstAvailableAsync(
+                    cancellationToken);
+            }
+
+            return;
+        }
+
+        try
+        {
+            var traffic =
+                await _client.GetTrafficInfoAsync(
+                    cancellationToken);
+
+            _traffic = traffic;
+            _updatedAt = DateTimeOffset.Now;
+            _error = null;
+
+            if (traffic.QuotaUsedPercent >=
+                _options.SwitchThresholdPercent)
+            {
+                _statuses[_currentUser.Id] =
+                    KerioUserStatus.LimitReached;
+
                 Publish();
-            }
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
 
-    private async Task SwitchToFirstAvailableAsync(CancellationToken cancellationToken)
-    {
-        await _gate.WaitAsync(cancellationToken);
-        try { await SwitchToFirstAvailableUnsafeAsync(cancellationToken); }
-        finally { _gate.Release(); }
-    }
+                if (_options.AutomaticSwitching)
+                {
+                    await SwitchToNextUserAsync(
+                        cancellationToken);
+                }
 
-    private async Task SwitchToFirstAvailableUnsafeAsync(CancellationToken cancellationToken)
-    {
-        foreach (var candidate in _users.Where(x => x.IsEnabled).OrderBy(x => x.Priority))
-        {
-            var status = _statuses.GetValueOrDefault(candidate.Id, KerioUserStatus.Waiting);
-            if (status is KerioUserStatus.LimitReached or KerioUserStatus.AuthenticationFailed)
-                continue;
-
-            try
-            {
-                await SwitchToAsync(candidate, cancellationToken);
                 return;
             }
-            catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
-            {
-                _error = $"{candidate.Username}: {ex.Message}";
-                Publish();
-            }
-        }
 
-        _error = "Не удалось авторизовать ни одну доступную учетную запись.";
-        Publish();
+            _statuses[_currentUser.Id] =
+                KerioUserStatus.Active;
+
+            Publish();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Ошибка обновления состояния Kerio.");
+
+            _error = ex.Message;
+
+            if (_currentUser is not null)
+            {
+                _statuses[_currentUser.Id] =
+                    KerioUserStatus.Error;
+            }
+
+            Publish();
+        }
     }
 
-    private async Task SwitchToAsync(KerioUser user, CancellationToken cancellationToken)
+    public async Task SwitchToNextUserAsync(
+        CancellationToken cancellationToken = default)
     {
-        var password = await _credentialStore.GetPasswordAsync(user.Id, cancellationToken);
-        if (password is null)
+        List<KerioUser> candidates;
+
+        lock (_sync)
         {
-            _statuses[user.Id] = KerioUserStatus.AuthenticationFailed;
-            _error = $"Для пользователя {user.Username} не найден пароль.";
+            candidates = _users
+                .Where(x => x.IsEnabled)
+                .OrderBy(x => x.Priority)
+                .ToList();
+        }
+
+        if (candidates.Count == 0)
+        {
+            _error = "Нет активных учетных записей.";
             Publish();
             return;
         }
 
-        await LogoutAndDisposeAsync(cancellationToken);
+        var currentId = _currentUser?.Id;
+
+        var nextCandidates = currentId.HasValue
+            ? candidates
+                .SkipWhile(x => x.Id != currentId.Value)
+                .Skip(1)
+                .Concat(candidates.TakeWhile(x => x.Id != currentId.Value))
+                .ToList()
+            : candidates;
+
+        foreach (var candidate in nextCandidates)
+        {
+            if (await TrySwitchToAsync(
+                    candidate,
+                    cancellationToken))
+            {
+                return;
+            }
+        }
+
+        _currentUser = null;
+        _traffic = null;
+
+        _error = "Не удалось подключить ни одну учетную запись.";
+
+        Publish();
+    }
+
+    private async Task MonitorAsync(
+        CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(
+            TimeSpan.FromSeconds(
+                Math.Max(1, _options.IntervalSeconds)));
+
+        while (await timer.WaitForNextTickAsync(
+                   cancellationToken))
+        {
+            await RefreshAsync(
+                cancellationToken);
+        }
+    }
+
+    private async Task SwitchToFirstAvailableAsync(
+        CancellationToken cancellationToken)
+    {
+        List<KerioUser> candidates;
+
+        lock (_sync)
+        {
+            candidates = _users
+                .Where(x => x.IsEnabled)
+                .OrderBy(x => x.Priority)
+                .ToList();
+        }
+
+        if (candidates.Count == 0)
+        {
+            _error = "Нет активных учетных записей.";
+            Publish();
+            return;
+        }
+
+        foreach (var candidate in candidates)
+        {
+            if (await TrySwitchToAsync(
+                    candidate,
+                    cancellationToken))
+            {
+                return;
+            }
+        }
+
+        _currentUser = null;
+        _traffic = null;
+
+        _error = "Не удалось авторизовать ни одну учетную запись.";
+
+        Publish();
+    }
+
+    private async Task<bool> TrySwitchToAsync(
+        KerioUser user,
+        CancellationToken cancellationToken)
+    {
+        var password =
+            await _credentialStore.GetPasswordAsync(
+                user.Id,
+                cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(password))
+        {
+            _statuses[user.Id] =
+                KerioUserStatus.AuthenticationFailed;
+
+            _error =
+                $"Для пользователя {user.Username} не найден пароль.";
+
+            Publish();
+
+            return false;
+        }
+
+        await LogoutAndDisposeAsync(
+            cancellationToken);
 
         var client = _clientFactory.Create();
+
         try
         {
-            await client.LoginAsync(user.Username, password, cancellationToken);
-            var traffic = await client.GetTrafficInfoAsync(cancellationToken);
+            _statuses[user.Id] =
+                KerioUserStatus.Waiting;
+
+            Publish();
+
+            await client.LoginAsync(
+                user.Username,
+                password,
+                cancellationToken);
+
+            var traffic =
+                await client.GetTrafficInfoAsync(
+                    cancellationToken);
+
+            if (traffic.QuotaUsedPercent >=
+                _options.SwitchThresholdPercent)
+            {
+                _statuses[user.Id] =
+                    KerioUserStatus.LimitReached;
+
+                await client.LogoutAsync(
+                    cancellationToken);
+
+                await client.DisposeAsync();
+
+                Publish();
+
+                return false;
+            }
 
             _client = client;
             _currentUser = user;
             _traffic = traffic;
             _updatedAt = DateTimeOffset.Now;
             _error = null;
-            _statuses[user.Id] = traffic.QuotaUsedPercent >= _options.SwitchThresholdPercent
-                ? KerioUserStatus.LimitReached
-                : KerioUserStatus.Active;
+
+            _statuses[user.Id] =
+                KerioUserStatus.Active;
 
             Publish();
 
-            if (_options.AutomaticSwitching &&
-                traffic.QuotaUsedPercent >= _options.SwitchThresholdPercent)
-            {
-                var next = GetNextUser();
-                if (next is not null)
-                    await SwitchToAsync(next, cancellationToken);
-            }
+            return true;
         }
-        catch
+        catch (OperationCanceledException)
         {
             await client.DisposeAsync();
-            _statuses[user.Id] = KerioUserStatus.AuthenticationFailed;
             throw;
         }
-    }
-
-    private KerioUser? GetNextUser()
-    {
-        var enabled = _users
-            .Where(x => x.IsEnabled)
-            .OrderBy(x => x.Priority)
-            .ToList();
-
-        if (enabled.Count == 0)
-            return null;
-
-        var currentIndex = _currentUser is null
-            ? -1
-            : enabled.FindIndex(x => x.Id == _currentUser.Id);
-
-        for (var offset = 1; offset <= enabled.Count; offset++)
+        catch (HttpRequestException ex)
         {
-            var index = (currentIndex + offset) % enabled.Count;
-            var candidate = enabled[index];
+            await client.DisposeAsync();
 
-            if (!_statuses.TryGetValue(candidate.Id, out var status) ||
-                status is KerioUserStatus.Waiting or KerioUserStatus.Active)
-            {
-                return candidate;
-            }
+            _statuses[user.Id] =
+                KerioUserStatus.Error;
+
+            _error =
+                $"{user.Username}: {ex.Message}";
+
+            _logger.LogWarning(
+                ex,
+                "Ошибка HTTP при подключении {Username}.",
+                user.Username);
+
+            Publish();
+
+            return false;
         }
+        catch (UnauthorizedAccessException ex)
+        {
+            await client.DisposeAsync();
 
-        return null;
+            _statuses[user.Id] =
+                KerioUserStatus.AuthenticationFailed;
+
+            _error =
+                $"{user.Username}: {ex.Message}";
+
+            _logger.LogWarning(
+                ex,
+                "Ошибка авторизации {Username}.",
+                user.Username);
+
+            Publish();
+
+            return false;
+        }
+        catch (InvalidOperationException ex)
+        {
+            await client.DisposeAsync();
+
+            _statuses[user.Id] =
+                KerioUserStatus.AuthenticationFailed;
+
+            _error =
+                $"{user.Username}: {ex.Message}";
+
+            _logger.LogWarning(
+                ex,
+                "Ошибка подключения {Username}.",
+                user.Username);
+
+            Publish();
+
+            return false;
+        }
+        catch (Exception ex)
+        {
+            await client.DisposeAsync();
+
+            _statuses[user.Id] =
+                KerioUserStatus.Error;
+
+            _error =
+                $"{user.Username}: {ex.Message}";
+
+            _logger.LogError(
+                ex,
+                "Неожиданная ошибка при подключении {Username}.",
+                user.Username);
+
+            Publish();
+
+            return false;
+        }
     }
 
-    private async Task LogoutAndDisposeAsync(CancellationToken cancellationToken)
+    private async Task LogoutAndDisposeAsync(
+        CancellationToken cancellationToken)
     {
-        if (_client is null)
+        var client = _client;
+
+        _client = null;
+        _currentUser = null;
+        _traffic = null;
+
+        if (client is null)
             return;
 
-        try { await _client.LogoutAsync(cancellationToken); }
-        catch { }
+        try
+        {
+            await client.LogoutAsync(
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(
+                ex,
+                "Ошибка при выходе из Kerio.");
+        }
         finally
         {
-            await _client.DisposeAsync();
-            _client = null;
-            _currentUser = null;
-            _traffic = null;
+            await client.DisposeAsync();
         }
     }
 
-    private void NormalizePriorities()
+    private void InitializeStatuses()
     {
-        for (var i = 0; i < _users.Count; i++)
-            _users[i].Priority = i + 1;
+        lock (_sync)
+        {
+            _statuses.Clear();
+
+            foreach (var user in _users)
+            {
+                _statuses[user.Id] =
+                    KerioUserStatus.Waiting;
+            }
+        }
     }
 
-    private void Publish() => SnapshotChanged?.Invoke(
-        this,
-        new MonitoringSnapshot(_currentUser, _traffic,
-            _currentUser is null ? null : _statuses.GetValueOrDefault(_currentUser.Id),
-            _error,
-            _updatedAt));
+    private void Publish()
+    {
+        Dictionary<Guid, KerioUserStatus> statuses;
+
+        lock (_sync)
+        {
+            statuses = new Dictionary<Guid, KerioUserStatus>(
+                _statuses);
+        }
+
+        SnapshotChanged?.Invoke(
+            this,
+            new MonitoringSnapshot(
+                _currentUser,
+                _traffic,
+                statuses,
+                _error,
+                _updatedAt));
+    }
+
+    private static void NormalizePriorities(
+        IList<KerioUser> users)
+    {
+        for (var i = 0; i < users.Count; i++)
+        {
+            users[i].Priority = i + 1;
+        }
+    }
 
     public async ValueTask DisposeAsync()
     {
-        await StopAsync();
-        _lifetime.Dispose();
-        _gate.Dispose();
+        if (_monitoringCts is not null)
+        {
+            await _monitoringCts.CancelAsync();
+        }
+
+        if (_monitoringTask is not null)
+        {
+            try
+            {
+                await _monitoringTask;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        await LogoutAndDisposeAsync(
+            CancellationToken.None);
+
+        _monitoringCts?.Dispose();
     }
 }

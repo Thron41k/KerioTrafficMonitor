@@ -1,22 +1,31 @@
-using System.ComponentModel;
-using System.Windows;
 using KerioTrafficMonitor.Presentation.ViewModels;
+using System.Windows;
 
 namespace KerioTrafficMonitor.Presentation.Views;
 
 public partial class MainWindow : Window
 {
-    public MainWindow() => InitializeComponent();
+    private readonly MainViewModel _viewModel;
 
-    private void Window_Loaded(object sender, RoutedEventArgs e)
+    public MainWindow(MainViewModel viewModel)
     {
-        if (DataContext is MainViewModel vm)
-            _ = vm.LoadUsersAsyncCommand.ExecuteAsync(null);
+        InitializeComponent();
+
+        _viewModel = viewModel;
+        DataContext = _viewModel;
     }
 
-    private async void Window_Closing(object? sender, CancelEventArgs e)
+    protected override async void OnContentRendered(EventArgs e)
     {
-        if (DataContext is MainViewModel vm)
-            await vm.StopAsync();
+        base.OnContentRendered(e);
+
+        await _viewModel.StartAsync();
+    }
+
+    protected override async void OnClosed(EventArgs e)
+    {
+        await _viewModel.StopAsync();
+
+        base.OnClosed(e);
     }
 }
