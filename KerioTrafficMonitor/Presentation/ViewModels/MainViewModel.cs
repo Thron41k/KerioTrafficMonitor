@@ -11,14 +11,14 @@ public partial class MainViewModel : ObservableObject
 {
     private readonly IUserRotationService _rotation;
     private readonly IUserStore _userStore;
-
+    private readonly ICredentialStore _credentialStore;
     public MainViewModel(
         IUserRotationService rotation,
-        IUserStore userStore)
+        IUserStore userStore, ICredentialStore credentialStore)
     {
         _rotation = rotation;
         _userStore = userStore;
-
+        _credentialStore = credentialStore;
         _rotation.SnapshotChanged += OnSnapshotChanged;
     }
 
@@ -44,8 +44,13 @@ public partial class MainViewModel : ObservableObject
 
     [ObservableProperty]
     private string? errorText;
+
     [ObservableProperty]
     private string currentUsername = "—";
+
+
+    public double QuotaRemainingPercent =>
+        Math.Max(0, 100 - QuotaUsedPercent);
 
     public async Task StartAsync()
     {
@@ -66,33 +71,114 @@ public partial class MainViewModel : ObservableObject
 
         await _rotation.StartAsync();
 
-        MoveUpCommand.NotifyCanExecuteChanged();
-        MoveDownCommand.NotifyCanExecuteChanged();
-        DeleteUserCommand.NotifyCanExecuteChanged();
+        NotifyCommandStates();
     }
 
     public async Task StopAsync()
     {
         await _rotation.StopAsync();
+
+        _rotation.SnapshotChanged -= OnSnapshotChanged;
     }
 
     [RelayCommand]
     private async Task RefreshAsync()
     {
-        await _rotation.RefreshAsync();
+        ErrorText = null;
+
+        try
+        {
+            await _rotation.RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            ErrorText = ex.Message;
+        }
     }
 
     [RelayCommand]
     private async Task SwitchNowAsync()
     {
-        await _rotation.SwitchToNextUserAsync();
+        ErrorText = null;
+
+        try
+        {
+            await _rotation.SwitchToNextUserAsync();
+        }
+        catch (Exception ex)
+        {
+            ErrorText = ex.Message;
+        }
     }
 
     [RelayCommand]
     private async Task AddUserAsync()
     {
-        // Здесь оставляем существующую реализацию
-        // добавления пользователя из твоего текущего MainViewModel.
+        var dialog = new Views.UserDialog
+        {
+            Owner = System.Windows.Application.Current.MainWindow
+        };
+
+        if (dialog.ShowDialog() != true)
+            return;
+
+        var username = dialog.Username;
+        var password = dialog.Password;
+
+        if (Users.Any(x =>
+                string.Equals(
+                    x.Username,
+                    username,
+                    StringComparison.OrdinalIgnoreCase)))
+        {
+            MessageBox.Show(
+                $"Пользователь «{username}» уже добавлен.",
+                "Пользователь существует",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+
+            return;
+        }
+
+        var user = new KerioUser
+        {
+            Id = Guid.NewGuid(),
+            Username = username,
+            Priority = Users.Count + 1,
+            IsEnabled = true
+        };
+
+        var userViewModel = new UserViewModel(user);
+
+        try
+        {
+            await _credentialStore.SavePasswordAsync(
+                user.Id,
+                password);
+
+            Users.Add(userViewModel);
+
+            RefreshPriorities();
+
+            await SaveUsersAndApplyAsync();
+
+            SelectedUser = userViewModel;
+        }
+        catch (Exception ex)
+        {
+            Users.Remove(userViewModel);
+
+            RefreshPriorities();
+
+            await _credentialStore.DeletePasswordAsync(
+                user.Id);
+
+            MessageBox.Show(
+                $"Не удалось добавить пользователя:\n{ex.Message}",
+                "Ошибка",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
     }
 
     [RelayCommand]
@@ -101,8 +187,10 @@ public partial class MainViewModel : ObservableObject
         if (SelectedUser is null)
             return;
 
+        var userToDelete = SelectedUser;
+
         var result = MessageBox.Show(
-            $"Удалить пользователя «{SelectedUser.Username}»?",
+            $"Удалить пользователя «{userToDelete.Username}»?",
             "Удаление пользователя",
             MessageBoxButton.YesNo,
             MessageBoxImage.Question);
@@ -111,35 +199,34 @@ public partial class MainViewModel : ObservableObject
             return;
 
         var users = Users
-            .Where(x => x.Id != SelectedUser.Id)
+            .Where(x => x.Id != userToDelete.Id)
             .Select(x => x.Model)
             .ToList();
 
         NormalizePriorities(users);
 
-        await _userStore.SaveAsync(users);
-
-        Users.Remove(SelectedUser);
-        RefreshPriorities();
-
-        SelectedUser = Users.FirstOrDefault();
-
-        await _rotation.UpdateUsersAsync(users);
-    }
-
-    private void OnSnapshotChanged(
-        object? sender,
-        MonitoringSnapshot snapshot)
-    {
-        var dispatcher = System.Windows.Application.Current.Dispatcher;
-
-        if (dispatcher.CheckAccess())
+        try
         {
-            ApplySnapshot(snapshot);
+            await _userStore.SaveAsync(users);
+            await _credentialStore.DeletePasswordAsync(
+                userToDelete.Id);
+            Users.Remove(userToDelete);
+
+            RefreshPriorities();
+
+            SelectedUser = Users.FirstOrDefault();
+
+            await _rotation.UpdateUsersAsync(users);
+
+            NotifyCommandStates();
         }
-        else
+        catch (Exception ex)
         {
-            dispatcher.Invoke(() => ApplySnapshot(snapshot));
+            MessageBox.Show(
+                $"Не удалось удалить пользователя:\n{ex.Message}",
+                "Ошибка",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
     }
 
@@ -154,15 +241,33 @@ public partial class MainViewModel : ObservableObject
         if (index <= 0)
             return;
 
-        var other = Users[index - 1];
+        var selected = SelectedUser;
 
         Users.Move(index, index - 1);
 
         RefreshPriorities();
 
-        await SaveUsersAndApplyAsync();
+        try
+        {
+            await SaveUsersAndApplyAsync();
 
-        SelectedUser = other;
+            SelectedUser = selected;
+        }
+        catch (Exception ex)
+        {
+            // Возвращаем пользователя обратно,
+            // если сохранение не удалось.
+
+            Users.Move(index - 1, index);
+
+            RefreshPriorities();
+
+            MessageBox.Show(
+                $"Не удалось изменить приоритет:\n{ex.Message}",
+                "Ошибка",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
     }
 
     private bool CanMoveUp()
@@ -182,15 +287,33 @@ public partial class MainViewModel : ObservableObject
         if (index < 0 || index >= Users.Count - 1)
             return;
 
-        var other = Users[index + 1];
+        var selected = SelectedUser;
 
         Users.Move(index, index + 1);
 
         RefreshPriorities();
 
-        await SaveUsersAndApplyAsync();
+        try
+        {
+            await SaveUsersAndApplyAsync();
 
-        SelectedUser = other;
+            SelectedUser = selected;
+        }
+        catch (Exception ex)
+        {
+            // Возвращаем пользователя обратно,
+            // если сохранение не удалось.
+
+            Users.Move(index + 1, index);
+
+            RefreshPriorities();
+
+            MessageBox.Show(
+                $"Не удалось изменить приоритет:\n{ex.Message}",
+                "Ошибка",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
     }
 
     private bool CanMoveDown()
@@ -206,15 +329,35 @@ public partial class MainViewModel : ObservableObject
             .Select(x => x.Model)
             .ToList();
 
+        NormalizePriorities(users);
+
         await _userStore.SaveAsync(users);
 
         await _rotation.UpdateUsersAsync(users);
 
-        MoveUpCommand.NotifyCanExecuteChanged();
-        MoveDownCommand.NotifyCanExecuteChanged();
+        NotifyCommandStates();
     }
 
-    private void ApplySnapshot(MonitoringSnapshot snapshot)
+    private void OnSnapshotChanged(
+        object? sender,
+        MonitoringSnapshot snapshot)
+    {
+        var dispatcher =
+            System.Windows.Application.Current.Dispatcher;
+
+        if (dispatcher.CheckAccess())
+        {
+            ApplySnapshot(snapshot);
+        }
+        else
+        {
+            dispatcher.Invoke(
+                () => ApplySnapshot(snapshot));
+        }
+    }
+
+    private void ApplySnapshot(
+        MonitoringSnapshot snapshot)
     {
         foreach (var user in Users)
         {
@@ -235,10 +378,12 @@ public partial class MainViewModel : ObservableObject
                 snapshot.Traffic.QuotaUsedPercent;
 
             Received =
-                FormatBytes(snapshot.Traffic.ReceivedBytes);
+                FormatBytes(
+                    snapshot.Traffic.ReceivedBytes);
 
             Sent =
-                FormatBytes(snapshot.Traffic.SentBytes);
+                FormatBytes(
+                    snapshot.Traffic.SentBytes);
         }
         else
         {
@@ -247,11 +392,17 @@ public partial class MainViewModel : ObservableObject
             Sent = "—";
         }
 
+        OnPropertyChanged(
+            nameof(QuotaRemainingPercent));
+
         StatusText = GetStatusText(snapshot);
+
         CurrentUsername =
             snapshot.CurrentUser?.Username ?? "—";
+
         LastUpdated =
-            snapshot.UpdatedAt?.ToLocalTime()
+            snapshot.UpdatedAt?
+                .ToLocalTime()
                 .ToString("dd.MM.yyyy HH:mm:ss")
             ?? "—";
 
@@ -265,7 +416,10 @@ public partial class MainViewModel : ObservableObject
             return "Нет активного пользователя";
 
         if (snapshot.Traffic is null)
-            return $"Активен: {snapshot.CurrentUser.Username}";
+        {
+            return
+                $"Активен: {snapshot.CurrentUser.Username}";
+        }
 
         return
             $"Активен: {snapshot.CurrentUser.Username} " +
@@ -281,38 +435,24 @@ public partial class MainViewModel : ObservableObject
             return $"{bytes / 1024d:F1} KB";
 
         if (bytes < 1024L * 1024 * 1024)
-            return $"{bytes / 1024d / 1024d:F1} MB";
+        {
+            return
+                $"{bytes / 1024d / 1024d:F1} MB";
+        }
 
-        return $"{bytes / 1024d / 1024d / 1024d:F2} GB";
+        return
+            $"{bytes / 1024d / 1024d / 1024d:F2} GB";
     }
 
     private void RefreshPriorities()
     {
         for (var i = 0; i < Users.Count; i++)
         {
-            Users[i].Priority = i + 1;
-            Users[i].Model.Priority = i + 1;
+            var priority = i + 1;
+
+            Users[i].Priority = priority;
+            Users[i].Model.Priority = priority;
         }
-    }
-
-    private async Task LoadUsersAsync()
-    {
-        var users = await _userStore.LoadAsync();
-
-        Users.Clear();
-
-        foreach (var user in users.OrderBy(x => x.Priority))
-        {
-            Users.Add(new UserViewModel(user));
-        }
-
-        RefreshPriorities();
-
-        SelectedUser = Users.FirstOrDefault();
-
-        MoveUpCommand.NotifyCanExecuteChanged();
-        MoveDownCommand.NotifyCanExecuteChanged();
-        DeleteUserCommand.NotifyCanExecuteChanged();
     }
 
     private static void NormalizePriorities(
@@ -329,11 +469,23 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    private void NotifyCommandStates()
+    {
+        MoveUpCommand.NotifyCanExecuteChanged();
+        MoveDownCommand.NotifyCanExecuteChanged();
+        DeleteUserCommand.NotifyCanExecuteChanged();
+    }
+
     partial void OnSelectedUserChanged(
         UserViewModel? value)
     {
-        DeleteUserCommand.NotifyCanExecuteChanged();
-        MoveUpCommand.NotifyCanExecuteChanged();
-        MoveDownCommand.NotifyCanExecuteChanged();
+        NotifyCommandStates();
+    }
+
+    partial void OnQuotaUsedPercentChanged(
+        double value)
+    {
+        OnPropertyChanged(
+            nameof(QuotaRemainingPercent));
     }
 }

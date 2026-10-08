@@ -31,9 +31,38 @@ public partial class UserViewModel : ObservableObject
     [ObservableProperty]
     private bool _isEnabled;
 
+    public string StatusText => Status switch
+    {
+        KerioUserStatus.Disabled =>
+            "Отключен",
+
+        KerioUserStatus.Waiting =>
+            "Ожидание",
+
+        KerioUserStatus.Active =>
+            "Активен",
+
+        KerioUserStatus.LimitReached =>
+            "Лимит достигнут",
+
+        KerioUserStatus.AuthenticationFailed =>
+            "Ошибка авторизации",
+
+        KerioUserStatus.Error =>
+            "Ошибка",
+
+        _ =>
+            Status.ToString()
+    };
+
     public void RefreshFromModel()
     {
         Priority = Model.Priority;
         IsEnabled = Model.IsEnabled;
+    }
+
+    partial void OnStatusChanged(KerioUserStatus value)
+    {
+        OnPropertyChanged(nameof(StatusText));
     }
 }

@@ -1,44 +1,122 @@
+using KerioTrafficMonitor.Domain.Interfaces;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
-using KerioTrafficMonitor.Domain.Interfaces;
 
 namespace KerioTrafficMonitor.Infrastructure.Persistence;
 
-internal sealed class DpapiCredentialStore : ICredentialStore
+public sealed class DpapiCredentialStore : ICredentialStore
 {
-    private readonly string _directory = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "KerioTrafficMonitor", "credentials");
+    private static readonly byte[] Entropy =
+        Encoding.UTF8.GetBytes("KerioTrafficMonitor.Password.v1");
 
-    public Task<string?> GetPasswordAsync(Guid userId, CancellationToken cancellationToken = default)
+    private readonly string _directory;
+
+    public DpapiCredentialStore()
     {
-        var path = GetPath(userId);
-        if (!File.Exists(path))
-            return Task.FromResult<string?>(null);
+        _directory = Path.Combine(
+            Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData),
+            "KerioTrafficMonitor",
+            "credentials");
 
-        var encrypted = File.ReadAllBytes(path);
-        var plain = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
-        return Task.FromResult<string?>(Encoding.UTF8.GetString(plain));
-    }
-
-    public async Task SetPasswordAsync(Guid userId, string password, CancellationToken cancellationToken = default)
-    {
         Directory.CreateDirectory(_directory);
-        var encrypted = ProtectedData.Protect(
-            Encoding.UTF8.GetBytes(password), null, DataProtectionScope.CurrentUser);
-
-        await File.WriteAllBytesAsync(GetPath(userId), encrypted, cancellationToken);
     }
 
-    public Task DeletePasswordAsync(Guid userId, CancellationToken cancellationToken = default)
+    public async Task SavePasswordAsync(
+        Guid userId,
+        string password,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(password);
+
+        var plainBytes = Encoding.UTF8.GetBytes(password);
+
+        var encryptedBytes = ProtectedData.Protect(
+            plainBytes,
+            Entropy,
+            DataProtectionScope.CurrentUser);
+
+        var path = GetPath(userId);
+
+        var tempPath = $"{path}.{Guid.NewGuid():N}.tmp";
+
+        try
+        {
+            await File.WriteAllBytesAsync(
+                tempPath,
+                encryptedBytes,
+                cancellationToken);
+
+            File.Move(
+                tempPath,
+                path,
+                overwrite: true);
+        }
+        finally
+        {
+            TryDelete(tempPath);
+        }
+    }
+
+    public async Task<string?> GetPasswordAsync(
+        Guid userId,
+        CancellationToken cancellationToken = default)
     {
         var path = GetPath(userId);
-        if (File.Exists(path))
-            File.Delete(path);
+
+        if (!File.Exists(path))
+            return null;
+
+        var encryptedBytes =
+            await File.ReadAllBytesAsync(
+                path,
+                cancellationToken);
+
+        try
+        {
+            var plainBytes = ProtectedData.Unprotect(
+                encryptedBytes,
+                Entropy,
+                DataProtectionScope.CurrentUser);
+
+            return Encoding.UTF8.GetString(plainBytes);
+        }
+        catch (CryptographicException)
+        {
+            return null;
+        }
+    }
+
+    public Task DeletePasswordAsync(
+        Guid userId,
+        CancellationToken cancellationToken = default)
+    {
+        var path = GetPath(userId);
+
+        TryDelete(path);
 
         return Task.CompletedTask;
     }
 
-    private string GetPath(Guid userId) => Path.Combine(_directory, $"{userId:N}.bin");
+    private string GetPath(Guid userId)
+    {
+        return Path.Combine(
+            _directory,
+            $"{userId:N}.bin");
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch
+        {
+            // Не позволяем ошибке очистки временного файла
+            // скрыть исходную ошибку.
+        }
+    }
 }

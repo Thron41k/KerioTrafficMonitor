@@ -1,5 +1,4 @@
-﻿using System.IO;
-using System.Windows;
+﻿using System.Windows;
 using KerioTrafficMonitor.Application.Options;
 using KerioTrafficMonitor.Application.Services;
 using KerioTrafficMonitor.Domain.Interfaces;
@@ -25,12 +24,19 @@ public partial class App : System.Windows.Application
             .ConfigureAppConfiguration((_, configuration) =>
             {
                 configuration.SetBasePath(AppContext.BaseDirectory);
-                configuration.AddJsonFile("appsettings.json", optional: false, reloadOnChange: true);
+
+                configuration.AddJsonFile(
+                    "appsettings.json",
+                    optional: false,
+                    reloadOnChange: true);
             })
             .ConfigureServices((context, services) =>
             {
-                services.Configure<KerioOptions>(context.Configuration.GetSection("Kerio"));
-                services.Configure<MonitoringOptions>(context.Configuration.GetSection("Monitoring"));
+                services.Configure<KerioOptions>(
+                    context.Configuration.GetSection("Kerio"));
+
+                services.Configure<MonitoringOptions>(
+                    context.Configuration.GetSection("Monitoring"));
 
                 services.AddSingleton<IUserStore, JsonUserStore>();
                 services.AddSingleton<ICredentialStore, DpapiCredentialStore>();
@@ -45,9 +51,11 @@ public partial class App : System.Windows.Application
 
         await _host.StartAsync();
 
-        var mainWindow = _host.Services.GetRequiredService<MainWindow>();
-        mainWindow.DataContext = _host.Services.GetRequiredService<MainViewModel>();
+        var mainWindow =
+            _host.Services.GetRequiredService<MainWindow>();
+
         MainWindow = mainWindow;
+
         mainWindow.Show();
     }
 

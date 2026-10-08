@@ -62,7 +62,11 @@
                     <TextBlock Grid.Row="1" Text="{Binding Received}" FontSize="17" Margin="0,2,0,8" />
                     <TextBlock Grid.Row="2" Text="Передано" Foreground="Gray" />
                     <TextBlock Grid.Row="3" Text="{Binding Sent}" FontSize="17" Margin="0,2,0,8" />
-                    <TextBlock Grid.Row="4" Text="Осталось: {Binding Remaining}" FontWeight="SemiBold" />
+                    <TextBlock Grid.Row="4"
+                               FontWeight="SemiBold">
+                        <Run Text="Осталось: " />
+                        <Run Text="{Binding QuotaRemainingPercent, Mode=OneWay, StringFormat={}{0:F2}%}" />
+                    </TextBlock>
                 </Grid>
             </Grid>
         </Border>
