@@ -9,10 +9,19 @@
 	</PropertyGroup>
 
 	<ItemGroup>
+	  <None Remove="Assets\KerioTrafficMonitor.ico" />
+	</ItemGroup>
+
+	<ItemGroup>
 	  <PackageReference Include="AngleSharp" Version="1.8.4" />
 	  <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+	  <PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="2.0.1" />
 	  <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.20" />
 	  <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.20" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <Resource Include="Assets\KerioTrafficMonitor.ico" />
 	</ItemGroup>
 
 	<ItemGroup>
