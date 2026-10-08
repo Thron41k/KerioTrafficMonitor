@@ -1,9 +1,10 @@
+
 using KerioTrafficMonitor.Application.Options;
 using KerioTrafficMonitor.Domain.Interfaces;
 using KerioTrafficMonitor.Domain.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using System.Net.Http;
+using static System.Net.Mime.MediaTypeNames;
 
 namespace KerioTrafficMonitor.Application.Services;
 
@@ -250,7 +251,8 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
         _currentUser = null;
         _traffic = null;
 
-        _error = "Не удалось подключить ни одну учетную запись.";
+        _error =
+            "Не удалось подключить ни одну доступную учетную запись.";
 
         Publish();
     }
@@ -303,7 +305,8 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
         _currentUser = null;
         _traffic = null;
 
-        _error = "Не удалось авторизовать ни одну учетную запись.";
+        _error =
+            "Не удалось подключить ни одну доступную учетную запись.";
 
         Publish();
     }
@@ -329,82 +332,53 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
 
             return false;
         }
+        var previousUser = _currentUser;
 
+        if (previousUser is not null &&
+            previousUser.Id != user.Id &&
+            _statuses.TryGetValue(
+                previousUser.Id,
+                out var previousStatus) &&
+            previousStatus == KerioUserStatus.Active)
+        {
+            _statuses[previousUser.Id] =
+                KerioUserStatus.Waiting;
+        }
         await LogoutAndDisposeAsync(
             cancellationToken);
 
         var client = _clientFactory.Create();
 
+        _statuses[user.Id] =
+            KerioUserStatus.Waiting;
+
+        Publish();
+
+        // =========================================================
+        // 1. АВТОРИЗАЦИЯ
+        // =========================================================
+
         try
         {
-            _statuses[user.Id] =
-                KerioUserStatus.Waiting;
-
-            Publish();
+            _logger.LogInformation(
+                "Авторизация пользователя {Username}.",
+                user.Username);
 
             await client.LoginAsync(
                 user.Username,
                 password,
                 cancellationToken);
 
-            var traffic =
-                await client.GetTrafficInfoAsync(
-                    cancellationToken);
-
-            if (traffic.QuotaUsedPercent >=
-                _options.SwitchThresholdPercent)
-            {
-                _statuses[user.Id] =
-                    KerioUserStatus.LimitReached;
-
-                await client.LogoutAsync(
-                    cancellationToken);
-
-                await client.DisposeAsync();
-
-                Publish();
-
-                return false;
-            }
-
-            _client = client;
-            _currentUser = user;
-            _traffic = traffic;
-            _updatedAt = DateTimeOffset.Now;
-            _error = null;
-
-            _statuses[user.Id] =
-                KerioUserStatus.Active;
-
-            Publish();
-
-            return true;
+            _logger.LogInformation(
+                "Авторизация пользователя {Username} выполнена.",
+                user.Username);
         }
         catch (OperationCanceledException)
         {
             await client.DisposeAsync();
             throw;
         }
-        catch (HttpRequestException ex)
-        {
-            await client.DisposeAsync();
-
-            _statuses[user.Id] =
-                KerioUserStatus.Error;
-
-            _error =
-                $"{user.Username}: {ex.Message}";
-
-            _logger.LogWarning(
-                ex,
-                "Ошибка HTTP при подключении {Username}.",
-                user.Username);
-
-            Publish();
-
-            return false;
-        }
-        catch (UnauthorizedAccessException ex)
+        catch (Exception ex)
         {
             await client.DisposeAsync();
 
@@ -423,44 +397,97 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
 
             return false;
         }
-        catch (InvalidOperationException ex)
+
+        // =========================================================
+        // 2. ПОЛУЧЕНИЕ ТРАФИКА
+        // =========================================================
+
+        TrafficInfo traffic;
+
+        try
         {
-            await client.DisposeAsync();
-
-            _statuses[user.Id] =
-                KerioUserStatus.AuthenticationFailed;
-
-            _error =
-                $"{user.Username}: {ex.Message}";
-
-            _logger.LogWarning(
-                ex,
-                "Ошибка подключения {Username}.",
+            _logger.LogInformation(
+                "Получение трафика пользователя {Username}.",
                 user.Username);
 
-            Publish();
+            traffic =
+                await client.GetTrafficInfoAsync(
+                    cancellationToken);
 
-            return false;
+            _logger.LogInformation(
+                "Трафик пользователя {Username}: {QuotaUsed:F2}%.",
+                user.Username,
+                traffic.QuotaUsedPercent);
+        }
+        catch (OperationCanceledException)
+        {
+            await client.DisposeAsync();
+            throw;
         }
         catch (Exception ex)
         {
             await client.DisposeAsync();
 
+            // ВАЖНО:
+            // LoginAsync() уже успешно завершился.
+            // Поэтому ошибка MyAccount.get / JSON-RPC / HTTP
+            // НЕ является ошибкой авторизации.
             _statuses[user.Id] =
                 KerioUserStatus.Error;
 
             _error =
                 $"{user.Username}: {ex.Message}";
 
-            _logger.LogError(
+            _logger.LogWarning(
                 ex,
-                "Неожиданная ошибка при подключении {Username}.",
+                "Ошибка получения трафика {Username}.",
                 user.Username);
 
             Publish();
 
             return false;
         }
+
+        // =========================================================
+        // 3. ПРОВЕРКА ЛИМИТА
+        // =========================================================
+
+        if (traffic.QuotaUsedPercent >=
+            _options.SwitchThresholdPercent)
+        {
+            _statuses[user.Id] =
+                KerioUserStatus.LimitReached;
+
+            _error =
+                $"{user.Username}: достигнут лимит трафика " +
+                $"({traffic.QuotaUsedPercent:F2}%).";
+
+            await client.LogoutAsync(
+                cancellationToken);
+
+            await client.DisposeAsync();
+
+            Publish();
+
+            return false;
+        }
+
+        // =========================================================
+        // 4. УСПЕШНОЕ ПОДКЛЮЧЕНИЕ
+        // =========================================================
+
+        _client = client;
+        _currentUser = user;
+        _traffic = traffic;
+        _updatedAt = DateTimeOffset.Now;
+        _error = null;
+
+        _statuses[user.Id] =
+            KerioUserStatus.Active;
+
+        Publish();
+
+        return true;
     }
 
     private async Task LogoutAndDisposeAsync(
@@ -512,8 +539,9 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
 
         lock (_sync)
         {
-            statuses = new Dictionary<Guid, KerioUserStatus>(
-                _statuses);
+            statuses =
+                new Dictionary<Guid, KerioUserStatus>(
+                    _statuses);
         }
 
         SnapshotChanged?.Invoke(
@@ -557,5 +585,7 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
             CancellationToken.None);
 
         _monitoringCts?.Dispose();
+        _monitoringCts = null;
+        _monitoringTask = null;
     }
 }
