@@ -4,20 +4,25 @@ using Microsoft.Extensions.Options;
 
 namespace KerioTrafficMonitor.Infrastructure.Kerio;
 
-internal sealed class KerioClientFactory : IKerioClientFactory
+internal sealed class KerioClientFactory(IOptionsMonitor<KerioOptions> options) : IKerioClientFactory
 {
-    private readonly KerioOptions _options;
-
-    public KerioClientFactory(IOptions<KerioOptions> options)
-    {
-        _options = options.Value;
-    }
-
     public IKerioClient Create()
     {
-        if (!Uri.TryCreate(_options.BaseUrl, UriKind.Absolute, out var uri))
-            throw new InvalidOperationException("Kerio:BaseUrl имеет некорректный формат.");
+        var baseUrl = options.CurrentValue.BaseUrl;
 
-        return new KerioClient(uri, new KerioTrafficParser());
+        if (!Uri.TryCreate(
+                baseUrl,
+                UriKind.Absolute,
+                out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp &&
+             uri.Scheme != Uri.UriSchemeHttps))
+        {
+            throw new InvalidOperationException(
+                $"Некорректный адрес Kerio: '{baseUrl}'.");
+        }
+
+        return new KerioClient(
+            uri,
+            new KerioTrafficParser());
     }
 }

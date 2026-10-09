@@ -6,24 +6,15 @@ using System.Text.Json.Serialization;
 
 namespace KerioTrafficMonitor.Infrastructure.Kerio;
 
-internal sealed class JsonRpcClient
+internal sealed class JsonRpcClient(
+    HttpClient client,
+    Func<string?> getToken)
 {
-    private readonly HttpClient _client;
-    private readonly Func<string?> _getToken;
-
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
         NumberHandling = JsonNumberHandling.AllowReadingFromString
     };
-
-    public JsonRpcClient(
-        HttpClient client,
-        Func<string?> getToken)
-    {
-        _client = client;
-        _getToken = getToken;
-    }
 
     public async Task<T?> CallAsync<T>(
         string method,
@@ -43,12 +34,12 @@ internal sealed class JsonRpcClient
             JsonOptions);
 
         Console.WriteLine("========== KERIO RPC ==========");
-        Console.WriteLine($"URL: {_client.BaseAddress}lib/api/jsonrpc/");
+        Console.WriteLine($"URL: {client.BaseAddress}lib/api/jsonrpc/");
         Console.WriteLine($"Method: {method}");
         Console.WriteLine($"JSON length: {Encoding.UTF8.GetByteCount(json)}");
         Console.WriteLine($"JSON: {json}");
 
-        var token = _getToken();
+        var token = getToken();
 
         if (string.IsNullOrWhiteSpace(token))
         {
@@ -86,7 +77,7 @@ internal sealed class JsonRpcClient
 
         Console.WriteLine("BEFORE SEND");
 
-        using var response = await _client.SendAsync(
+        using var response = await client.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);

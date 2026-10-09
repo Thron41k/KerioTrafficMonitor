@@ -8,15 +8,17 @@ using static System.Net.Mime.MediaTypeNames;
 
 namespace KerioTrafficMonitor.Application.Services;
 
-public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
+public sealed class UserRotationService(
+    IKerioClientFactory clientFactory,
+    ICredentialStore credentialStore,
+    IUserStore userStore,
+    IOptionsMonitor<MonitoringOptions> options,
+    ILogger<UserRotationService> logger)
+    : IUserRotationService, IAsyncDisposable
 {
-    private readonly IKerioClientFactory _clientFactory;
-    private readonly ICredentialStore _credentialStore;
-    private readonly IUserStore _userStore;
-    private readonly MonitoringOptions _options;
-    private readonly ILogger<UserRotationService> _logger;
+    private readonly IOptionsMonitor<MonitoringOptions> _options = options;
 
-    private readonly object _sync = new();
+    private readonly Lock _sync = new();
 
     private readonly Dictionary<Guid, KerioUserStatus> _statuses = [];
 
@@ -32,20 +34,6 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
     private string? _error;
     private DateTimeOffset? _updatedAt;
 
-    public UserRotationService(
-        IKerioClientFactory clientFactory,
-        ICredentialStore credentialStore,
-        IUserStore userStore,
-        IOptions<MonitoringOptions> options,
-        ILogger<UserRotationService> logger)
-    {
-        _clientFactory = clientFactory;
-        _credentialStore = credentialStore;
-        _userStore = userStore;
-        _options = options.Value;
-        _logger = logger;
-    }
-
     public event EventHandler<MonitoringSnapshot>? SnapshotChanged;
 
     public async Task StartAsync(
@@ -54,7 +42,7 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
         if (_monitoringTask is not null)
             return;
 
-        _users = (await _userStore.LoadAsync(cancellationToken))
+        _users = (await userStore.LoadAsync(cancellationToken))
             .OrderBy(x => x.Priority)
             .ToList();
 
@@ -145,7 +133,7 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
 
         if (_currentUser is null || _client is null)
         {
-            if (_options.AutomaticSwitching)
+            if (_options.CurrentValue.AutomaticSwitching)
             {
                 await SwitchToFirstAvailableAsync(
                     cancellationToken);
@@ -165,14 +153,14 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
             _error = null;
 
             if (traffic.QuotaUsedPercent >=
-                _options.SwitchThresholdPercent)
+                _options.CurrentValue.SwitchThresholdPercent)
             {
                 _statuses[_currentUser.Id] =
                     KerioUserStatus.LimitReached;
 
                 Publish();
 
-                if (_options.AutomaticSwitching)
+                if (_options.CurrentValue.AutomaticSwitching)
                 {
                     await SwitchToNextUserAsync(
                         cancellationToken);
@@ -192,7 +180,7 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(
+            logger.LogError(
                 ex,
                 "Ошибка обновления состояния Kerio.");
 
@@ -262,7 +250,7 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
     {
         using var timer = new PeriodicTimer(
             TimeSpan.FromSeconds(
-                Math.Max(1, _options.IntervalSeconds)));
+                Math.Max(1, _options.CurrentValue.IntervalSeconds)));
 
         while (await timer.WaitForNextTickAsync(
                    cancellationToken))
@@ -316,7 +304,7 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var password =
-            await _credentialStore.GetPasswordAsync(
+            await credentialStore.GetPasswordAsync(
                 user.Id,
                 cancellationToken);
 
@@ -347,7 +335,7 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
         await LogoutAndDisposeAsync(
             cancellationToken);
 
-        var client = _clientFactory.Create();
+        var client = clientFactory.Create();
 
         _statuses[user.Id] =
             KerioUserStatus.Waiting;
@@ -360,7 +348,7 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
 
         try
         {
-            _logger.LogInformation(
+            logger.LogInformation(
                 "Авторизация пользователя {Username}.",
                 user.Username);
 
@@ -369,7 +357,7 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
                 password,
                 cancellationToken);
 
-            _logger.LogInformation(
+            logger.LogInformation(
                 "Авторизация пользователя {Username} выполнена.",
                 user.Username);
         }
@@ -388,7 +376,7 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
             _error =
                 $"{user.Username}: {ex.Message}";
 
-            _logger.LogWarning(
+            logger.LogWarning(
                 ex,
                 "Ошибка авторизации {Username}.",
                 user.Username);
@@ -406,7 +394,7 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
 
         try
         {
-            _logger.LogInformation(
+            logger.LogInformation(
                 "Получение трафика пользователя {Username}.",
                 user.Username);
 
@@ -414,7 +402,7 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
                 await client.GetTrafficInfoAsync(
                     cancellationToken);
 
-            _logger.LogInformation(
+            logger.LogInformation(
                 "Трафик пользователя {Username}: {QuotaUsed:F2}%.",
                 user.Username,
                 traffic.QuotaUsedPercent);
@@ -438,7 +426,7 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
             _error =
                 $"{user.Username}: {ex.Message}";
 
-            _logger.LogWarning(
+            logger.LogWarning(
                 ex,
                 "Ошибка получения трафика {Username}.",
                 user.Username);
@@ -453,7 +441,7 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
         // =========================================================
 
         if (traffic.QuotaUsedPercent >=
-            _options.SwitchThresholdPercent)
+            _options.CurrentValue.SwitchThresholdPercent)
         {
             _statuses[user.Id] =
                 KerioUserStatus.LimitReached;
@@ -509,7 +497,7 @@ public sealed class UserRotationService : IUserRotationService, IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(
+            logger.LogDebug(
                 ex,
                 "Ошибка при выходе из Kerio.");
         }

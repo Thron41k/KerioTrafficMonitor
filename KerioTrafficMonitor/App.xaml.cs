@@ -1,4 +1,4 @@
-﻿using System.Windows;
+﻿using KerioTrafficMonitor.Application.Interfaces;
 using KerioTrafficMonitor.Application.Options;
 using KerioTrafficMonitor.Application.Services;
 using KerioTrafficMonitor.Domain.Interfaces;
@@ -9,6 +9,8 @@ using KerioTrafficMonitor.Presentation.Views;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using System.IO;
+using System.Windows;
 
 namespace KerioTrafficMonitor;
 
@@ -19,7 +21,8 @@ public partial class App : System.Windows.Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
-
+        Directory.CreateDirectory(
+            UserSettingsPaths.DirectoryPath);
         _host = Host.CreateDefaultBuilder()
             .ConfigureAppConfiguration((_, configuration) =>
             {
@@ -28,6 +31,11 @@ public partial class App : System.Windows.Application
                 configuration.AddJsonFile(
                     "appsettings.json",
                     optional: false,
+                    reloadOnChange: true);
+
+                configuration.AddJsonFile(
+                    UserSettingsPaths.FilePath,
+                    optional: true,
                     reloadOnChange: true);
             })
             .ConfigureServices((context, services) =>
@@ -46,6 +54,7 @@ public partial class App : System.Windows.Application
                 services.AddTransient<MainViewModel>();
                 services.AddTransient<UserDialog>();
                 services.AddTransient<MainWindow>();
+                services.AddSingleton<ISettingsStore, JsonSettingsStore>();
             })
             .Build();
 
