@@ -22,9 +22,24 @@
         </Grid.RowDefinitions>
 
         <DockPanel Grid.Row="0" Margin="0,0,0,16">
-            <TextBlock Text="Kerio Traffic Monitor   " FontSize="24" FontWeight="SemiBold" />
+            <StackPanel Orientation="Horizontal"
+                        VerticalAlignment="Center">
+
+                <TextBlock
+                    Text="Kerio Traffic Monitor"
+                    FontSize="24"
+                    FontWeight="SemiBold" />
+
+                <TextBlock
+                    Text="{Binding VersionLabel}"
+                    FontSize="13"
+                    Foreground="Gray"
+                    VerticalAlignment="Bottom"
+                    Margin="10,0,0,4" />
+
+            </StackPanel>
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                <Button Command="{Binding RefreshCommand}" Margin="0,0,8,0" Padding="16,7">Обновить</Button>
+                <Button Command="{Binding RefreshCommand}" Margin="10,0,8,0" Padding="16,7">Обновить</Button>
                 <Button Command="{Binding SwitchNowCommand}" Padding="16,7">Сменить пользователя</Button>
                 <Button
                     Click="Settings_Click"

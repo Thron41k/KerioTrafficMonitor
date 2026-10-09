@@ -52,7 +52,10 @@ public partial class MainViewModel : ObservableObject
     private string currentUsername = "—";
 
     [ObservableProperty] private string _trayToolTipText;
-
+    
+    
+    public string VersionLabel =>
+        $"v{_updateService.CurrentVersion}";
     public double QuotaRemainingPercent =>
         Math.Max(0, 100 - QuotaUsedPercent);
 
