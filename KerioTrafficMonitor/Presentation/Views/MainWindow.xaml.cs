@@ -39,6 +39,16 @@ public partial class MainWindow : Window
         // UserRotationService продолжает мониторинг.
     }
 
+    private void TrayCheckUpdates_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (_viewModel.CheckForUpdatesCommand.CanExecute(null))
+        {
+            _viewModel.CheckForUpdatesCommand.Execute(null);
+        }
+    }
+
     private void TrayOpen_Click(
         object sender,
         RoutedEventArgs e)

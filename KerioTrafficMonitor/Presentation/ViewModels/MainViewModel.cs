@@ -1,9 +1,10 @@
-using System.Collections.ObjectModel;
-using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using KerioTrafficMonitor.Application.Interfaces;
 using KerioTrafficMonitor.Domain.Interfaces;
 using KerioTrafficMonitor.Domain.Models;
+using System.Collections.ObjectModel;
+using System.Windows;
 
 namespace KerioTrafficMonitor.Presentation.ViewModels;
 
@@ -12,13 +13,15 @@ public partial class MainViewModel : ObservableObject
     private readonly IUserRotationService _rotation;
     private readonly IUserStore _userStore;
     private readonly ICredentialStore _credentialStore;
+    private readonly IUpdateService _updateService;
     public MainViewModel(
         IUserRotationService rotation,
-        IUserStore userStore, ICredentialStore credentialStore)
+        IUserStore userStore, ICredentialStore credentialStore, IUpdateService updateService)
     {
         _rotation = rotation;
         _userStore = userStore;
         _credentialStore = credentialStore;
+        _updateService = updateService;
         _rotation.SnapshotChanged += OnSnapshotChanged;
     }
 
@@ -80,6 +83,77 @@ public partial class MainViewModel : ObservableObject
         await _rotation.StopAsync();
 
         _rotation.SnapshotChanged -= OnSnapshotChanged;
+    }
+
+    [RelayCommand]
+    private async Task CheckForUpdatesAsync()
+    {
+        try
+        {
+            var result =
+                await _updateService.CheckForUpdatesAsync();
+
+            if (!result.IsInstalled)
+            {
+                MessageBox.Show(
+                    "Автообновление доступно только для установленной " +
+                    "версии приложения.\n\n" +
+                    "Сначала установите приложение из Velopack Setup.",
+                    "Проверка обновлений",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+
+                return;
+            }
+
+            if (!result.UpdateAvailable)
+            {
+                MessageBox.Show(
+                    $"Установлена последняя версия: " +
+                    $"{result.CurrentVersion}.",
+                    "Проверка обновлений",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+
+                return;
+            }
+
+            var notes = string.IsNullOrWhiteSpace(result.ReleaseNotes)
+                ? "Описание изменений не указано."
+                : result.ReleaseNotes;
+
+            if (notes.Length > 1500)
+            {
+                notes = notes[..1500] + "...";
+            }
+
+            var answer = MessageBox.Show(
+                $"Доступна новая версия: {result.AvailableVersion}\n" +
+                $"Текущая версия: {result.CurrentVersion}\n\n" +
+                $"Изменения:\n{notes}\n\n" +
+                "Скачать и установить обновление сейчас?",
+                "Доступно обновление",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (answer != MessageBoxResult.Yes)
+                return;
+
+            await _updateService.DownloadUpdateAsync();
+
+            // Закрываем сессию Kerio и останавливаем мониторинг.
+            await _rotation.StopAsync();
+
+            _updateService.ApplyAndRestart();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                $"Не удалось обновить приложение:\n{ex.Message}",
+                "Ошибка обновления",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
     }
 
     [RelayCommand]

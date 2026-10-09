@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Read version from tag
+        id: get-version
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+
+          if ($tag -notmatch '^v(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') {
+            throw "Invalid release tag: $tag. Expected v1.0.0."
+          }
+
+          $version = $Matches['version']
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Publish application
+        shell: pwsh
+        run: |
+          dotnet publish `
+            KerioTrafficMonitor/KerioTrafficMonitor.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:Version=${{ steps.get-version.outputs.version }} `
+            -o publish
+
+      - name: Install Velopack CLI
+        shell: pwsh
+        run: |
+          dotnet tool install --global vpk --version 1.2.0
+
+      - name: Download previous release feed
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $repositoryUrl = "https://github.com/$env:GITHUB_REPOSITORY"
+
+          $listJson = gh release list `
+            --repo $env:GITHUB_REPOSITORY `
+            --limit 1 `
+            --json tagName
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not query existing GitHub Releases."
+          }
+
+          $releases = @($listJson | ConvertFrom-Json)
+
+          if ($releases.Count -gt 0) {
+            $releaseJson = gh release view $releases[0].tagName `
+              --repo $env:GITHUB_REPOSITORY `
+              --json assets
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not inspect the latest release."
+            }
+
+            $release = $releaseJson | ConvertFrom-Json
+
+            if ($release.assets.name -contains "releases.stable.json") {
+              vpk download github `
+                --repoUrl $repositoryUrl `
+                --token $env:GITHUB_TOKEN
+
+              if ($LASTEXITCODE -ne 0) {
+                throw "Failed to download the previous Velopack feed."
+              }
+            }
+            else {
+              Write-Host "No Velopack feed found. Creating the initial feed."
+            }
+          }
+          else {
+            Write-Host "First release. No previous feed to download."
+          }
+
+      - name: Pack Velopack release
+        shell: pwsh
+        run: |
+          vpk pack `
+            --packId KerioTrafficMonitorDesktop `
+            --packVersion ${{ steps.get-version.outputs.version }} `
+            --packDir publish `
+            --mainExe KerioTrafficMonitor.exe `
+            --packTitle "Kerio Traffic Monitor" `
+            --icon KerioTrafficMonitor/Assets/KerioTrafficMonitor.ico
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          vpk upload github `
+            --repoUrl "https://github.com/$env:GITHUB_REPOSITORY" `
+            --token $env:GITHUB_TOKEN `
+            --publish `
+            --releaseName "Kerio Traffic Monitor ${{ steps.get-version.outputs.version }}" `
+            --tag "v${{ steps.get-version.outputs.version }}"

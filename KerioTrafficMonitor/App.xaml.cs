@@ -4,6 +4,7 @@ using KerioTrafficMonitor.Application.Services;
 using KerioTrafficMonitor.Domain.Interfaces;
 using KerioTrafficMonitor.Infrastructure.Kerio;
 using KerioTrafficMonitor.Infrastructure.Persistence;
+using KerioTrafficMonitor.Infrastructure.Updates;
 using KerioTrafficMonitor.Presentation.ViewModels;
 using KerioTrafficMonitor.Presentation.Views;
 using Microsoft.Extensions.Configuration;
@@ -11,6 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System.IO;
 using System.Windows;
+using Velopack;
 
 namespace KerioTrafficMonitor;
 
@@ -18,6 +20,16 @@ public partial class App : System.Windows.Application
 {
     private IHost? _host;
 
+
+    [STAThread]
+    public static void Main(string[] args)
+    {
+        VelopackApp.Build().Run();
+
+        var app = new App();
+        app.InitializeComponent();
+        app.Run();
+    }
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -56,6 +68,7 @@ public partial class App : System.Windows.Application
                 services.AddTransient<UserDialog>();
                 services.AddTransient<MainWindow>();
                 services.AddSingleton<ISettingsStore, JsonSettingsStore>();
+                services.AddSingleton<IUpdateService, VelopackUpdateService>();
             })
             .Build();
 

@@ -6,27 +6,35 @@
 		<Nullable>enable</Nullable>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<UseWPF>true</UseWPF>
+		<Version>1.0.0</Version>
+		<StartupObject>KerioTrafficMonitor.App</StartupObject>
 	</PropertyGroup>
 
 	<ItemGroup>
-	  <None Remove="Assets\KerioTrafficMonitor.ico" />
+		<None Remove="Assets\KerioTrafficMonitor.ico" />
+	</ItemGroup>
+
+
+	<ItemGroup>
+		<ApplicationDefinition Remove="App.xaml" />
+		<Page Include="App.xaml" />
 	</ItemGroup>
 
 	<ItemGroup>
-	  <PackageReference Include="AngleSharp" Version="1.8.4" />
-	  <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
-	  <PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="2.0.1" />
-	  <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.20" />
-	  <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.20" />
+		<PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+		<PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="2.0.1" />
+		<PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.20" />
+		<PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.20" />
+		<PackageReference Include="Velopack" Version="1.2.161" />
 	</ItemGroup>
 
 	<ItemGroup>
-	  <Resource Include="Assets\KerioTrafficMonitor.ico" />
+		<Resource Include="Assets\KerioTrafficMonitor.ico" />
 	</ItemGroup>
 
 	<ItemGroup>
-	  <None Update="appsettings.json">
-	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-	  </None>
+		<None Update="appsettings.json">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
 	</ItemGroup>
 </Project>
