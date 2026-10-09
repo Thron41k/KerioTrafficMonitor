@@ -104,74 +104,23 @@
             <TextBlock Text="{Binding ErrorText}" Foreground="Firebrick" TextTrimming="CharacterEllipsis" />
         </DockPanel>
         <tb:TaskbarIcon
-    x:Name="TrayIcon"
-    IconSource="/Assets/KerioTrafficMonitor.ico"
-    Visibility="Visible"
-    MenuActivation="LeftOrRightClick">
-
-            <tb:TaskbarIcon.TrayToolTip>
-                <ToolTip
-    StaysOpen="True"
-    ToolTipService.ShowDuration="60000">
-
-                    <Border Padding="10">
-                        <StackPanel>
-
-                            <TextBlock
-                FontSize="14"
-                FontWeight="SemiBold"
-                Text="Kerio Traffic Monitor"/>
-
-                            <Separator Margin="0,6"/>
-
-                            <TextBlock
-                Text="{Binding CurrentUser.Username,
-                               TargetNullValue=Нет активного пользователя,
-                               FallbackValue=Нет активного пользователя}"/>
-
-                            <TextBlock
-                Margin="0,4,0,0"
-                Text="{Binding Traffic.ReceivedBytes,
-                               StringFormat=Получено: {0:N0} байт}"/>
-
-                            <TextBlock
-                Text="{Binding Traffic.SentBytes,
-                               StringFormat=Отправлено: {0:N0} байт}"/>
-
-                            <TextBlock
-                Margin="0,4,0,0"
-                FontWeight="SemiBold"
-                Text="{Binding Traffic.QuotaUsedPercent,
-                               StringFormat=Использовано квоты: {0:F1}%}"/>
-
-                            <TextBlock
-                Text="{Binding Traffic.QuotaRemainingPercent,
-                               StringFormat=Остаток: {0:F1}%}"/>
-
-                            <TextBlock
-                Margin="0,4,0,0"
-                Text="{Binding UpdatedAt,
-                               StringFormat=Обновлено: {0:HH\\:mm\\:ss}}"/>
-
-                        </StackPanel>
-                    </Border>
-
-                </ToolTip>
-            </tb:TaskbarIcon.TrayToolTip>
+            x:Name="TrayIcon"
+            IconSource="/Assets/KerioTrafficMonitor.ico"
+            Visibility="Visible"
+            ToolTipText="{Binding TrayToolTipText}"
+            TrayMouseDoubleClick="TrayIcon_TrayMouseDoubleClick">
 
             <tb:TaskbarIcon.ContextMenu>
                 <ContextMenu>
-
                     <MenuItem
-        Header="Открыть"
-        Click="TrayOpen_Click"/>
+                        Header="Открыть"
+                        Click="TrayOpen_Click"/>
 
                     <Separator/>
 
                     <MenuItem
-        Header="Выйти"
-        Click="TrayExit_Click"/>
-
+                        Header="Выйти"
+                        Click="TrayExit_Click"/>
                 </ContextMenu>
             </tb:TaskbarIcon.ContextMenu>
 

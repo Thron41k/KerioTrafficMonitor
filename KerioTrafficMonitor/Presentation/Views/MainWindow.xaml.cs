@@ -101,6 +101,13 @@ public partial class MainWindow : Window
         Close();
     }
 
+    private void TrayIcon_TrayMouseDoubleClick(
+        object sender,
+        RoutedEventArgs e)
+    {
+        ShowMainWindow();
+    }
+
     private void MainWindow_Closed(
         object? sender,
         EventArgs e)

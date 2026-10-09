@@ -48,6 +48,7 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private string currentUsername = "—";
 
+    [ObservableProperty] private string _trayToolTipText;
 
     public double QuotaRemainingPercent =>
         Math.Max(0, 100 - QuotaUsedPercent);
@@ -396,7 +397,7 @@ public partial class MainViewModel : ObservableObject
             nameof(QuotaRemainingPercent));
 
         StatusText = GetStatusText(snapshot);
-
+        TrayToolTipText = GetTrayToolTipText(snapshot);
         CurrentUsername =
             snapshot.CurrentUser?.Username ?? "—";
 
@@ -426,22 +427,42 @@ public partial class MainViewModel : ObservableObject
             $"— квота {snapshot.Traffic.QuotaUsedPercent:F1}%";
     }
 
-    private static string FormatBytes(long bytes)
+    private string GetTrayToolTipText(MonitoringSnapshot snapshot)
     {
-        if (bytes < 1024)
-            return $"{bytes} B";
-
-        if (bytes < 1024 * 1024)
-            return $"{bytes / 1024d:F1} KB";
-
-        if (bytes < 1024L * 1024 * 1024)
+        if (snapshot.CurrentUser is null)
         {
-            return
-                $"{bytes / 1024d / 1024d:F1} MB";
+            return "Kerio Traffic Monitor\n" +
+                   "Активная учетная запись отсутствует.";
         }
 
-        return
-            $"{bytes / 1024d / 1024d / 1024d:F2} GB";
+        if (snapshot.Traffic is null)
+        {
+            return $"Пользователь: {snapshot.CurrentUser.Username}\n" +
+                   $"Получение данных...";
+        }
+
+        return $"Пользователь: {snapshot.CurrentUser.Username}\n" +
+               $"Получено: {FormatBytes(snapshot.Traffic.ReceivedBytes)}\n" +
+               $"Отправлено: {FormatBytes(snapshot.Traffic.SentBytes)}\n" +
+               $"Всего: {FormatBytes(snapshot.Traffic.TotalBytes)}\n" +
+               $"Квота: {snapshot.Traffic.QuotaUsedPercent:F1}%\n" +
+               $"Остаток: {snapshot.Traffic.QuotaRemainingPercent:F1}%\n" +
+               $"Обновлено: {snapshot.UpdatedAt:HH:mm:ss}";
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        const double kb = 1024;
+        const double mb = kb * 1024;
+        const double gb = mb * 1024;
+
+        return bytes switch
+        {
+            >= (long)gb => $"{bytes / gb:F2} ГБ",
+            >= (long)mb => $"{bytes / mb:F2} МБ",
+            >= (long)kb => $"{bytes / kb:F2} КБ",
+            _ => $"{bytes:N0} Б"
+        };
     }
 
     private void RefreshPriorities()
