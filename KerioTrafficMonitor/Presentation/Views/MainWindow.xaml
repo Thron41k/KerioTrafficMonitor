@@ -26,6 +26,12 @@
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                 <Button Command="{Binding RefreshCommand}" Margin="0,0,8,0" Padding="16,7">Обновить</Button>
                 <Button Command="{Binding SwitchNowCommand}" Padding="16,7">Сменить пользователя</Button>
+                <Button
+                    Click="Settings_Click"
+                    Margin="10,0,8,0"
+                    Padding="16,7">
+                    Настройки
+                </Button>
             </StackPanel>
         </DockPanel>
 
@@ -117,7 +123,10 @@
                         Click="TrayOpen_Click"/>
 
                     <Separator/>
-
+                    <MenuItem
+                        Header="Настройки..."
+                        Click="TraySettings_Click"/>
+                    <Separator/>
                     <MenuItem
                         Header="Выйти"
                         Click="TrayExit_Click"/>

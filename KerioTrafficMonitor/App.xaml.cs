@@ -50,7 +50,8 @@ public partial class App : System.Windows.Application
                 services.AddSingleton<ICredentialStore, DpapiCredentialStore>();
                 services.AddSingleton<IKerioClientFactory, KerioClientFactory>();
                 services.AddSingleton<IUserRotationService, UserRotationService>();
-
+                services.AddTransient<SettingsViewModel>();
+                services.AddTransient<SettingsWindow>();
                 services.AddTransient<MainViewModel>();
                 services.AddTransient<UserDialog>();
                 services.AddTransient<MainWindow>();

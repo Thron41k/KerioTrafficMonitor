@@ -1,5 +1,6 @@
 using KerioTrafficMonitor.Domain.Interfaces;
 using KerioTrafficMonitor.Presentation.ViewModels;
+using Microsoft.Extensions.DependencyInjection;
 using System.ComponentModel;
 using System.Windows;
 
@@ -10,11 +11,13 @@ public partial class MainWindow : Window
     private readonly MainViewModel _viewModel;
     private bool _isApplicationClosing;
     private readonly IUserRotationService _rotationService;
+    private readonly IServiceScopeFactory _scopeFactory;
     public MainWindow(MainViewModel viewModel,
-        IUserRotationService rotationService)
+        IUserRotationService rotationService, IServiceScopeFactory scopeFactory)
     {
         InitializeComponent();
         _rotationService = rotationService;
+        _scopeFactory = scopeFactory;
         _viewModel = viewModel;
         DataContext = _viewModel;
         StateChanged += MainWindow_StateChanged;
@@ -127,5 +130,33 @@ public partial class MainWindow : Window
         await _viewModel.StopAsync();
 
         base.OnClosed(e);
+    }
+
+    private void Settings_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        OpenSettingsWindow();
+    }
+
+    private void TraySettings_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        ShowMainWindow();
+        OpenSettingsWindow();
+    }
+
+    private void OpenSettingsWindow()
+    {
+        using var scope = _scopeFactory.CreateScope();
+
+        var window =
+            scope.ServiceProvider.GetRequiredService<SettingsWindow>();
+
+        window.Owner = this;
+        window.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+
+        window.ShowDialog();
     }
 }
