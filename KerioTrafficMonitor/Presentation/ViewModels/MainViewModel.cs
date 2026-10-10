@@ -25,7 +25,7 @@ public partial class MainViewModel : ObservableObject
         _rotation.SnapshotChanged += OnSnapshotChanged;
     }
 
-    private ObservableCollection<UserViewModel> Users { get; } = [];
+    public ObservableCollection<UserViewModel> Users { get; } = [];
 
     [ObservableProperty]
     private UserViewModel? _selectedUser;

@@ -8,6 +8,7 @@
 		<UseWPF>true</UseWPF>
 		<Version>1.0.2</Version>
 		<StartupObject>KerioTrafficMonitor.App</StartupObject>
+		<ApplicationIcon>Assets\KerioTrafficMonitor.ico</ApplicationIcon>
 	</PropertyGroup>
 
 	<ItemGroup>
