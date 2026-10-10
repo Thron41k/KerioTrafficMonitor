@@ -10,13 +10,11 @@ public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
     private bool _isApplicationClosing;
-    private readonly IUserRotationService _rotationService;
     private readonly IServiceScopeFactory _scopeFactory;
     public MainWindow(MainViewModel viewModel,
         IUserRotationService rotationService, IServiceScopeFactory scopeFactory)
     {
         InitializeComponent();
-        _rotationService = rotationService;
         _scopeFactory = scopeFactory;
         _viewModel = viewModel;
         DataContext = _viewModel;
@@ -80,29 +78,21 @@ public partial class MainWindow : Window
         if (_isApplicationClosing)
             return;
 
-        /*
-         * Closing у WPF синхронный, а StopAsync асинхронный.
-         * Поэтому первый Closing отменяем, корректно останавливаем
-         * мониторинг, затем повторно вызываем Shutdown().
-         */
+        // Первый запрос на закрытие откладываем до окончания StopAsync.
         e.Cancel = true;
-
         _isApplicationClosing = true;
 
         try
         {
-            await _rotationService.StopAsync(
-                CancellationToken.None);
+            await _viewModel.StopAsync();
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine(
-                $"Ошибка остановки мониторинга: {ex}");
+                $"Ошибка остановки приложения: {ex}");
         }
         finally
         {
-            TrayIcon.Dispose();
-
             System.Windows.Application.Current.Shutdown();
         }
     }
@@ -133,13 +123,6 @@ public partial class MainWindow : Window
         base.OnContentRendered(e);
 
         await _viewModel.StartAsync();
-    }
-
-    protected override async void OnClosed(EventArgs e)
-    {
-        await _viewModel.StopAsync();
-
-        base.OnClosed(e);
     }
 
     private void Settings_Click(

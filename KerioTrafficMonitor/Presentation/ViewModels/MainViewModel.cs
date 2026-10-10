@@ -74,8 +74,6 @@ public partial class MainViewModel : ObservableObject
 
         SelectedUser = Users.FirstOrDefault();
 
-        await _rotation.UpdateUsersAsync(users);
-
         await _rotation.StartAsync();
 
         NotifyCommandStates();
