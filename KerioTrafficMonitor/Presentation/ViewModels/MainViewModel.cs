@@ -25,33 +25,33 @@ public partial class MainViewModel : ObservableObject
         _rotation.SnapshotChanged += OnSnapshotChanged;
     }
 
-    public ObservableCollection<UserViewModel> Users { get; } = [];
+    private ObservableCollection<UserViewModel> Users { get; } = [];
 
     [ObservableProperty]
-    private UserViewModel? selectedUser;
+    private UserViewModel? _selectedUser;
 
     [ObservableProperty]
-    private string statusText = "Ожидание";
+    private string _statusText = "Ожидание";
 
     [ObservableProperty]
-    private double quotaUsedPercent;
+    private double _quotaUsedPercent;
 
     [ObservableProperty]
-    private string received = "—";
+    private string _received = "—";
 
     [ObservableProperty]
-    private string sent = "—";
+    private string _sent = "—";
 
     [ObservableProperty]
-    private string lastUpdated = "—";
+    private string _lastUpdated = "—";
 
     [ObservableProperty]
-    private string? errorText;
+    private string? _errorText;
 
     [ObservableProperty]
-    private string currentUsername = "—";
+    private string _currentUsername = "—";
 
-    [ObservableProperty] private string _trayToolTipText;
+    [ObservableProperty] private string _trayToolTipText = "";
     
     
     public string VersionLabel =>
@@ -418,8 +418,7 @@ public partial class MainViewModel : ObservableObject
         object? sender,
         MonitoringSnapshot snapshot)
     {
-        var dispatcher =
-            System.Windows.Application.Current.Dispatcher;
+        var dispatcher = System.Windows.Application.Current.Dispatcher;
 
         if (dispatcher.CheckAccess())
         {
@@ -427,8 +426,8 @@ public partial class MainViewModel : ObservableObject
         }
         else
         {
-            dispatcher.Invoke(
-                () => ApplySnapshot(snapshot));
+            dispatcher.BeginInvoke(
+                new Action(() => ApplySnapshot(snapshot)));
         }
     }
 
