@@ -4,6 +4,7 @@ using KerioTrafficMonitor.Application.Services;
 using KerioTrafficMonitor.Domain.Interfaces;
 using KerioTrafficMonitor.Infrastructure.Kerio;
 using KerioTrafficMonitor.Infrastructure.Persistence;
+using KerioTrafficMonitor.Infrastructure.Startup;
 using KerioTrafficMonitor.Infrastructure.Updates;
 using KerioTrafficMonitor.Presentation.ViewModels;
 using KerioTrafficMonitor.Presentation.Views;
@@ -20,7 +21,6 @@ public partial class App : System.Windows.Application
 {
     private IHost? _host;
 
-
     [STAThread]
     public static void Main(string[] args)
     {
@@ -30,11 +30,13 @@ public partial class App : System.Windows.Application
         app.InitializeComponent();
         app.Run();
     }
+
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
         Directory.CreateDirectory(
             UserSettingsPaths.DirectoryPath);
+
         _host = Host.CreateDefaultBuilder()
             .ConfigureAppConfiguration((_, configuration) =>
             {
@@ -62,6 +64,7 @@ public partial class App : System.Windows.Application
                 services.AddSingleton<ICredentialStore, DpapiCredentialStore>();
                 services.AddSingleton<IKerioClientFactory, KerioClientFactory>();
                 services.AddSingleton<IUserRotationService, UserRotationService>();
+                services.AddSingleton<IStartupService, WindowsStartupService>();
                 services.AddTransient<SettingsViewModel>();
                 services.AddTransient<SettingsWindow>();
                 services.AddTransient<MainViewModel>();
@@ -78,7 +81,6 @@ public partial class App : System.Windows.Application
             _host.Services.GetRequiredService<MainWindow>();
 
         MainWindow = mainWindow;
-
         mainWindow.Show();
     }
 

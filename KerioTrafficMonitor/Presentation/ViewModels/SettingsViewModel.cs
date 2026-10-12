@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using KerioTrafficMonitor.Application.Interfaces;
@@ -14,6 +14,7 @@ public partial class SettingsViewModel : ObservableObject
     private readonly IOptionsMonitor<KerioOptions> _kerioOptions;
     private readonly IOptionsMonitor<MonitoringOptions> _monitoringOptions;
     private readonly IUserRotationService _rotationService;
+    private readonly IStartupService _startupService;
 
     public event Action<bool>? RequestClose;
 
@@ -30,6 +31,9 @@ public partial class SettingsViewModel : ObservableObject
     private bool _automaticSwitching;
 
     [ObservableProperty]
+    private bool _startWithWindows;
+
+    [ObservableProperty]
     private string? _errorMessage;
 
     [ObservableProperty]
@@ -39,12 +43,14 @@ public partial class SettingsViewModel : ObservableObject
         ISettingsStore settingsStore,
         IOptionsMonitor<KerioOptions> kerioOptions,
         IOptionsMonitor<MonitoringOptions> monitoringOptions,
-        IUserRotationService rotationService)
+        IUserRotationService rotationService,
+        IStartupService startupService)
     {
         _settingsStore = settingsStore;
         _kerioOptions = kerioOptions;
         _monitoringOptions = monitoringOptions;
         _rotationService = rotationService;
+        _startupService = startupService;
 
         LoadSettings();
     }
@@ -65,6 +71,7 @@ public partial class SettingsViewModel : ObservableObject
                 CultureInfo.InvariantCulture);
 
         AutomaticSwitching = monitoring.AutomaticSwitching;
+        StartWithWindows = _startupService.IsEnabled();
     }
 
     [RelayCommand]
@@ -104,12 +111,21 @@ public partial class SettingsViewModel : ObservableObject
                 kerio,
                 monitoring);
 
-            // Перезапускаем мониторинг, чтобы новый интервал
-            // применился сразу, а новое подключение использовало
-            // обновлённый адрес сервера.
+            // Перезапускаем мониторинг, чтобы новые параметры применились сразу.
             await _rotationService.StopAsync();
-
             await _rotationService.StartAsync();
+
+            try
+            {
+                _startupService.SetEnabled(StartWithWindows);
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage =
+                    "Настройки мониторинга сохранены, но не удалось изменить " +
+                    $"автозапуск Windows: {ex.Message}";
+                return;
+            }
 
             RequestClose?.Invoke(true);
         }

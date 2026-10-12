@@ -70,6 +70,10 @@
                 Content="Автоматически переключать пользователя при достижении порога"
                 IsChecked="{Binding AutomaticSwitching}"/>
 
+            <CheckBox
+                Content="Запускать Kerio Traffic Monitor при входе в Windows"
+                IsChecked="{Binding StartWithWindows}"/>
+
             <Border
                 Background="#FFF1F0"
                 BorderBrush="#E8A5A0"
